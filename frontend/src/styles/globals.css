@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;0,700;1,400&family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  --color-pine: #182D29;
+  --color-ivory: #F3F0E6;
+  --color-coral: #E36B4B;
+  --color-teal: #377E75;
+  --color-citron: #C5D66B;
+  --color-graphite: #596662;
+  --color-stone: #D9D8CC;
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Manrope', Inter, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-ivory);
+    font-family: var(--font-body);
+    color: var(--color-pine);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer components {
+  .metric-value {
+    font-family: var(--font-mono);
+    font-size: 1.875rem;
+    font-weight: 500;
+    color: var(--color-pine);
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: color 0.15s, background-color 0.15s;
+  }
+  .nav-item-active {
+    background-color: rgba(55, 126, 117, 0.2);
+    color: var(--color-teal);
+  }
+  .nav-item-inactive {
+    color: rgba(217, 216, 204, 0.8);
+  }
+  .nav-item-inactive:hover {
+    color: var(--color-ivory);
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-graphite);
+  }
+  .card-editorial {
+    background-color: white;
+    border: 1px solid var(--color-stone);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+  }
+  .btn-primary {
+    background-color: var(--color-teal);
+    color: white;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: background-color 0.15s;
+    cursor: pointer;
+    border: none;
+  }
+  .btn-primary:hover { background-color: rgba(55, 126, 117, 0.9); }
+  .btn-coral {
+    background-color: var(--color-coral);
+    color: white;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: background-color 0.15s;
+    cursor: pointer;
+    border: none;
+  }
+  .btn-coral:hover { background-color: rgba(227, 107, 75, 0.9); }
+  .btn-ghost {
+    border: 1px solid var(--color-stone);
+    color: var(--color-graphite);
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: border-color 0.15s, color 0.15s;
+    cursor: pointer;
+    background: transparent;
+  }
+  .btn-ghost:hover { border-color: var(--color-teal); color: var(--color-teal); }
+  .badge-positive {
+    background-color: rgba(55, 126, 117, 0.1);
+    color: var(--color-teal);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+  }
+  .badge-negative {
+    background-color: rgba(227, 107, 75, 0.1);
+    color: var(--color-coral);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+  }
+  .badge-neutral {
+    background-color: rgba(217, 216, 204, 0.5);
+    color: var(--color-graphite);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+  }
+  .badge-citron {
+    background-color: rgba(197, 214, 107, 0.2);
+    color: var(--color-pine);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+  }
+}

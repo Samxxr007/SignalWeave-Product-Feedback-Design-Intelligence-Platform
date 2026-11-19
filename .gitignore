@@ -1,0 +1,17 @@
+.env
+*.env.local
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+uploads/
+*.log
+*.egg-info/
+.DS_Store
+alembic.ini.local
+backend/data/uploads/
