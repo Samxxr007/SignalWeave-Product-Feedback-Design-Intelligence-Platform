@@ -43,6 +43,29 @@ app.include_router(innovation_recommendations.router, prefix="/api/v1", tags=["R
 app.include_router(innovation_roadmap.router, prefix="/api/v1", tags=["Roadmap Simulator"])
 
 
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "app": "SignalWeave API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "ui": "http://localhost:5173",
+        "health": "/health"
+    }
+
+
 @app.get("/health")
+@app.get("/api/v1/health")
 def health():
-    return {"status": "ok", "service": "SignalWeave API"}
+    return {
+        "status": "ok",
+        "service": "SignalWeave API",
+        "database": "connected",
+        "version": "1.0.0"
+    }
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return {}

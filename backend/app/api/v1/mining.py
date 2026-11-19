@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
@@ -12,28 +12,199 @@ from app.services.topics.tfidf_nmf import run_topic_modelling
 from app.services.clustering.kmeans_cluster import run_kmeans
 from app.services.association.apriori_miner import run_apriori
 
-router = APIRouter(prefix="/datasets")
+router = APIRouter()
 
 
-@router.post("/{dataset_id}/sentiment/run")
-def trigger_sentiment(dataset_id: int, db: Session = Depends(get_db)):
+# ============================================================
+# Frontend Contract Endpoints (/api/v1/mining/...)
+# ============================================================
+
+@router.post("/mining/sentiment/run")
+def trigger_sentiment_frontend(dataset_id: int = Query(...), db: Session = Depends(get_db)):
     result = run_on_dataset(db, dataset_id)
     return result
 
 
-@router.get("/{dataset_id}/sentiment/distribution")
-def get_sentiment_distribution(dataset_id: int, db: Session = Depends(get_db)):
+@router.post("/mining/aspects/run")
+def trigger_aspect_extraction_frontend(dataset_id: int = Query(...), db: Session = Depends(get_db)):
+    db.query(FactAspectSentiment).filter(FactAspectSentiment.dataset_id == dataset_id).delete()
+    result = run_aspect_extraction(db, dataset_id)
+    return result
+
+
+@router.post("/mining/topics/run")
+def trigger_topic_modelling_frontend(
+    dataset_id: int = Query(...),
+    n_components: int = Query(8),
+    db: Session = Depends(get_db)
+):
+    reviews = db.query(FactReview).filter(FactReview.dataset_id == dataset_id).all()
+    texts = [r.review_text_clean or r.review_text_original or "" for r in reviews]
+    res = run_topic_modelling(texts, n_components=n_components, n_top_words=10)
+
+    run = MiningRun(
+        dataset_id=dataset_id,
+        algorithm="TF-IDF + NMF",
+        parameters={"n_components": n_components, "n_top_words": 10},
+        results=res,
+        records_processed=len(texts),
+        status="completed"
+    )
+    db.add(run)
+    db.commit()
+    return res
+
+
+@router.post("/mining/clustering/run")
+def trigger_clustering_frontend(
+    dataset_id: int = Query(...),
+    k: int = Query(5),
+    db: Session = Depends(get_db)
+):
+    reviews = db.query(FactReview).filter(FactReview.dataset_id == dataset_id).all()
+    texts = [r.review_text_clean or r.review_text_original or "" for r in reviews]
+    review_ids = [r.fact_id for r in reviews]
+    res = run_kmeans(texts, review_ids, k=k)
+
+    run = MiningRun(
+        dataset_id=dataset_id,
+        algorithm="K-Means",
+        parameters={"k": k},
+        results=res,
+        records_processed=len(texts),
+        status="completed"
+    )
+    db.add(run)
+    db.commit()
+    return res
+
+
+@router.post("/mining/association/run")
+def trigger_association_frontend(
+    dataset_id: int = Query(...),
+    min_support: float = Query(0.04),
+    min_confidence: float = Query(0.25),
+    db: Session = Depends(get_db)
+):
+    rows = (
+        db.query(FactAspectSentiment.fact_id, FactAspectSentiment.aspect_name)
+        .filter(FactAspectSentiment.dataset_id == dataset_id)
+        .all()
+    )
+    baskets_dict = {}
+    for fact_id, aspect in rows:
+        if fact_id not in baskets_dict:
+            baskets_dict[fact_id] = set()
+        baskets_dict[fact_id].add(aspect)
+
+    aspect_baskets = list(baskets_dict.values())
+    res = run_apriori(aspect_baskets, min_support=min_support, min_confidence=min_confidence)
+
+    run = MiningRun(
+        dataset_id=dataset_id,
+        algorithm="Apriori",
+        parameters={"min_support": min_support, "min_confidence": min_confidence},
+        results=res,
+        records_processed=len(aspect_baskets),
+        status="completed"
+    )
+    db.add(run)
+    db.commit()
+    return res
+
+
+@router.get("/mining/history")
+def get_mining_history(dataset_id: int = Query(...), db: Session = Depends(get_db)):
+    runs = (
+        db.query(MiningRun)
+        .filter(MiningRun.dataset_id == dataset_id)
+        .order_by(MiningRun.run_id.desc())
+        .limit(20)
+        .all()
+    )
+    return [
+        {
+            "run_id": r.run_id,
+            "dataset_id": r.dataset_id,
+            "algorithm": r.algorithm,
+            "parameters": r.parameters,
+            "records_processed": r.records_processed,
+            "status": r.status,
+            "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+            "results": r.results
+        }
+        for r in runs
+    ]
+
+
+@router.get("/mining/results/{run_id}")
+def get_mining_result_by_id(run_id: int, db: Session = Depends(get_db)):
+    run = db.query(MiningRun).filter(MiningRun.run_id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Mining run not found")
+    return run.results
+
+
+@router.get("/mining/aspect-dictionary")
+def get_aspect_dictionary(db: Session = Depends(get_db)):
+    aspects = db.query(AspectDictionary).filter(AspectDictionary.is_active == True).all()
+    return [
+        {
+            "id": a.id,
+            "aspect_name": a.aspect_name,
+            "keywords": a.keywords,
+            "category": a.category
+        }
+        for a in aspects
+    ]
+
+
+@router.post("/mining/aspect-dictionary")
+def add_aspect_dictionary(data: dict = Body(...), db: Session = Depends(get_db)):
+    entry = AspectDictionary(
+        aspect_name=data.get("aspect_name"),
+        keywords=data.get("keywords", []),
+        category=data.get("category", "general")
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+@router.put("/mining/aspect-dictionary/{id}")
+def update_aspect_dictionary(id: int, data: dict = Body(...), db: Session = Depends(get_db)):
+    entry = db.query(AspectDictionary).filter(AspectDictionary.id == id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Aspect dictionary entry not found")
+    if "aspect_name" in data:
+        entry.aspect_name = data["aspect_name"]
+    if "keywords" in data:
+        entry.keywords = data["keywords"]
+    if "category" in data:
+        entry.category = data["category"]
+    db.commit()
+    return entry
+
+
+# ============================================================
+# Legacy Endpoints (/api/v1/datasets/{id}/...)
+# ============================================================
+
+@router.post("/datasets/{dataset_id}/sentiment/run")
+def trigger_sentiment(dataset_id: int, db: Session = Depends(get_db)):
+    return run_on_dataset(db, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/sentiment/distribution")
+def get_sentiment_dist(dataset_id: int, db: Session = Depends(get_db)):
     dist = (
         db.query(FactReview.sentiment_label, func.count(FactReview.fact_id))
         .filter(FactReview.dataset_id == dataset_id)
         .group_by(FactReview.sentiment_label)
         .all()
     )
-    avg_score = (
-        db.query(func.avg(FactReview.sentiment_score))
-        .filter(FactReview.dataset_id == dataset_id)
-        .scalar() or 0.0
-    )
+    avg_score = db.query(func.avg(FactReview.sentiment_score)).filter(FactReview.dataset_id == dataset_id).scalar() or 0.0
     return {
         "dataset_id": dataset_id,
         "distribution": {label: count for label, count in dist if label},
@@ -41,29 +212,21 @@ def get_sentiment_distribution(dataset_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/{dataset_id}/aspects/extract")
-def trigger_aspect_extraction(dataset_id: int, db: Session = Depends(get_db)):
-    # Clear existing aspect extractions for this dataset first
+@router.post("/datasets/{dataset_id}/aspects/extract")
+def trigger_aspect_extract(dataset_id: int, db: Session = Depends(get_db)):
     db.query(FactAspectSentiment).filter(FactAspectSentiment.dataset_id == dataset_id).delete()
-    result = run_aspect_extraction(db, dataset_id)
-    return result
+    return run_aspect_extraction(db, dataset_id)
 
 
-@router.get("/{dataset_id}/aspects")
+@router.get("/datasets/{dataset_id}/aspects")
 def get_aspect_breakdown(dataset_id: int, db: Session = Depends(get_db)):
     aspects = (
         db.query(
             FactAspectSentiment.aspect_name,
             func.count(FactAspectSentiment.aspect_id).label('total'),
-            func.sum(
-                case((FactAspectSentiment.aspect_label == 'positive', 1), else_=0)
-            ).label('positive'),
-            func.sum(
-                case((FactAspectSentiment.aspect_label == 'negative', 1), else_=0)
-            ).label('negative'),
-            func.sum(
-                case((FactAspectSentiment.aspect_label == 'neutral', 1), else_=0)
-            ).label('neutral'),
+            func.sum(case((FactAspectSentiment.aspect_label == 'positive', 1), else_=0)).label('positive'),
+            func.sum(case((FactAspectSentiment.aspect_label == 'negative', 1), else_=0)).label('negative'),
+            func.sum(case((FactAspectSentiment.aspect_label == 'neutral', 1), else_=0)).label('neutral'),
             func.avg(FactAspectSentiment.aspect_score).label('avg_score')
         )
         .filter(FactAspectSentiment.dataset_id == dataset_id)
@@ -83,113 +246,40 @@ def get_aspect_breakdown(dataset_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/{dataset_id}/topics/run")
-def trigger_topic_modelling(dataset_id: int, req: TopicModellingRequest, db: Session = Depends(get_db)):
-    reviews = db.query(FactReview).filter(FactReview.dataset_id == dataset_id).all()
-    texts = [r.review_text_clean or r.review_text_original or "" for r in reviews]
-    
-    res = run_topic_modelling(texts, n_components=req.n_components or 5, n_top_words=req.n_top_words or 10)
-    
-    # Save run
-    run = MiningRun(
-        dataset_id=dataset_id,
-        algorithm="TF-IDF + NMF",
-        parameters=req.model_dump(),
-        results=res,
-        records_processed=len(texts),
-        status="completed"
-    )
-    db.add(run)
-    db.commit()
-    return res
+@router.post("/datasets/{dataset_id}/topics/run")
+def trigger_topic_modelling_legacy(dataset_id: int, req: TopicModellingRequest, db: Session = Depends(get_db)):
+    return trigger_topic_modelling_frontend(dataset_id, req.n_components or 8, db)
 
 
-@router.get("/{dataset_id}/topics/latest")
+@router.get("/datasets/{dataset_id}/topics/latest")
 def get_latest_topics(dataset_id: int, db: Session = Depends(get_db)):
-    run = (
-        db.query(MiningRun)
-        .filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "TF-IDF + NMF")
-        .order_by(MiningRun.run_id.desc())
-        .first()
-    )
+    run = db.query(MiningRun).filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "TF-IDF + NMF").order_by(MiningRun.run_id.desc()).first()
     if not run:
-        raise HTTPException(status_code=404, detail="No topic modelling run found for this dataset")
+        raise HTTPException(status_code=404, detail="No topic modelling run found")
     return run.results
 
 
-@router.post("/{dataset_id}/clustering/run")
-def trigger_clustering(dataset_id: int, req: ClusteringRequest, db: Session = Depends(get_db)):
-    reviews = db.query(FactReview).filter(FactReview.dataset_id == dataset_id).all()
-    texts = [r.review_text_clean or r.review_text_original or "" for r in reviews]
-    review_ids = [r.fact_id for r in reviews]
-    
-    res = run_kmeans(texts, review_ids, k=req.k or 5)
-    
-    run = MiningRun(
-        dataset_id=dataset_id,
-        algorithm="K-Means",
-        parameters=req.model_dump(),
-        results=res,
-        records_processed=len(texts),
-        status="completed"
-    )
-    db.add(run)
-    db.commit()
-    return res
+@router.post("/datasets/{dataset_id}/clustering/run")
+def trigger_clustering_legacy(dataset_id: int, req: ClusteringRequest, db: Session = Depends(get_db)):
+    return trigger_clustering_frontend(dataset_id, req.k or 5, db)
 
 
-@router.get("/{dataset_id}/clustering/latest")
+@router.get("/datasets/{dataset_id}/clustering/latest")
 def get_latest_clustering(dataset_id: int, db: Session = Depends(get_db)):
-    run = (
-        db.query(MiningRun)
-        .filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "K-Means")
-        .order_by(MiningRun.run_id.desc())
-        .first()
-    )
+    run = db.query(MiningRun).filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "K-Means").order_by(MiningRun.run_id.desc()).first()
     if not run:
-        raise HTTPException(status_code=404, detail="No clustering run found for this dataset")
+        raise HTTPException(status_code=404, detail="No clustering run found")
     return run.results
 
 
-@router.post("/{dataset_id}/association/run")
-def trigger_association(dataset_id: int, req: AssociationRequest, db: Session = Depends(get_db)):
-    # Group aspects by review
-    rows = (
-        db.query(FactAspectSentiment.fact_id, FactAspectSentiment.aspect_name)
-        .filter(FactAspectSentiment.dataset_id == dataset_id)
-        .all()
-    )
-    
-    baskets_dict = {}
-    for fact_id, aspect in rows:
-        if fact_id not in baskets_dict:
-            baskets_dict[fact_id] = set()
-        baskets_dict[fact_id].add(aspect)
-    
-    aspect_baskets = list(baskets_dict.values())
-    res = run_apriori(aspect_baskets, min_support=req.min_support or 0.05, min_confidence=req.min_confidence or 0.3)
-    
-    run = MiningRun(
-        dataset_id=dataset_id,
-        algorithm="Apriori",
-        parameters=req.model_dump(),
-        results=res,
-        records_processed=len(aspect_baskets),
-        status="completed"
-    )
-    db.add(run)
-    db.commit()
-    return res
+@router.post("/datasets/{dataset_id}/association/run")
+def trigger_association_legacy(dataset_id: int, req: AssociationRequest, db: Session = Depends(get_db)):
+    return trigger_association_frontend(dataset_id, req.min_support or 0.04, req.min_confidence or 0.25, db)
 
 
-@router.get("/{dataset_id}/association/latest")
+@router.get("/datasets/{dataset_id}/association/latest")
 def get_latest_association(dataset_id: int, db: Session = Depends(get_db)):
-    run = (
-        db.query(MiningRun)
-        .filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "Apriori")
-        .order_by(MiningRun.run_id.desc())
-        .first()
-    )
+    run = db.query(MiningRun).filter(MiningRun.dataset_id == dataset_id, MiningRun.algorithm == "Apriori").order_by(MiningRun.run_id.desc()).first()
     if not run:
-        raise HTTPException(status_code=404, detail="No association mining run found for this dataset")
+        raise HTTPException(status_code=404, detail="No association mining run found")
     return run.results

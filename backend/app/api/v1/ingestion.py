@@ -118,44 +118,57 @@ async def upload_dataset(
 
 
 @router.get("", response_model=List[DatasetOut])
+@router.get("/", response_model=List[DatasetOut])
 def list_datasets(db: Session = Depends(get_db)):
     return db.query(Dataset).order_by(Dataset.id.desc()).all()
 
 
-@router.get("/{dataset_id}", response_model=DatasetOut)
-def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
+@router.get("/{dataset_id}/preview")
+def preview_dataset(dataset_id: int, limit: int = 50, db: Session = Depends(get_db)):
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    return dataset
 
+    staging = db.query(StagingReview).filter(StagingReview.dataset_id == dataset_id).limit(limit).all()
+    rows = [s.raw_data or {
+        "review_id": s.review_id_original,
+        "product_name": s.product_name,
+        "category": s.category,
+        "review_text": s.review_text,
+        "rating": s.rating,
+        "review_date": str(s.review_date) if s.review_date else None,
+        "source": s.source
+    } for s in staging]
 
-@router.post("/{dataset_id}/mapping")
-def update_mapping(dataset_id: int, req: ColumnMappingRequest, db: Session = Depends(get_db)):
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    dataset.column_mapping = req.column_mapping
-    db.commit()
-    return {"status": "updated", "column_mapping": dataset.column_mapping}
-
-
-@router.post("/{dataset_id}/validate")
-def validate_dataset(dataset_id: int, db: Session = Depends(get_db)):
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    
+    columns = list(dataset.column_mapping.keys()) if dataset.column_mapping else (list(rows[0].keys()) if rows else [])
     return {
-        "dataset_id": dataset.id,
-        "total_records": dataset.total_records,
-        "valid_records": dataset.valid_records,
-        "rejected_records": dataset.rejected_records,
-        "status": dataset.status
+        "columns": columns,
+        "rows": rows,
+        "total": dataset.total_records or len(rows)
+    }
+
+
+@router.get("/{dataset_id}/stats")
+def get_dataset_stats(dataset_id: int, db: Session = Depends(get_db)):
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    staging = db.query(StagingReview).filter(StagingReview.dataset_id == dataset_id).limit(5).all()
+    sample_rows = [s.raw_data or {"product": s.product_name, "rating": s.rating} for s in staging]
+    columns = list(dataset.column_mapping.keys()) if dataset.column_mapping else []
+
+    return {
+        "total_records": dataset.total_records or 0,
+        "columns": columns,
+        "sample_rows": sample_rows,
+        "dtypes": {col: "string" for col in columns},
+        "missing_pct": {col: 0.0 for col in columns}
     }
 
 
 @router.post("/{dataset_id}/load")
+@router.post("/{dataset_id}/load-warehouse")
 def load_to_warehouse(dataset_id: int, db: Session = Depends(get_db)):
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not dataset:
